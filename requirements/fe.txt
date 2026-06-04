@@ -1,0 +1,6 @@
+-r base.txt
+
+# Streamlit UI for Knowledge Graph demo
+streamlit>=1.32
+streamlit-agraph>=0.0.45
+pandas>=2.0

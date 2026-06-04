@@ -1,0 +1,33 @@
+version: "3.9"
+
+# Local compose: backend image bakes in .env + gcp_credentials.json.
+# Run from repo root:  docker compose -f deployment/docker-compose-local.yaml up --build
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile-local
+    container_name: legal-agent-backend
+    ports:
+      - "8000:8080"
+    env_file:
+      - ../.env
+    environment:
+      - PORT=8080
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile.frontend
+    container_name: legal-agent-frontend
+    ports:
+      - "8501:8080"
+    env_file:
+      - ../.env
+    environment:
+      - PORT=8080
+      - BACKEND_URL=http://backend:8080
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -1,0 +1,177 @@
+name: legal-agent-dev-deploy
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+env:
+  # ---- GCP / secrets ----
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+  LEGAL_BUCKET: ${{ secrets.LEGAL_BUCKET }}
+  NEO4J_URI: ${{ secrets.NEO4J_URI }}
+  NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+  NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+  NEO4J_DATABASE: ${{ secrets.NEO4J_DATABASE }}
+
+  # ---- Static config ----
+  REGION: asia-southeast1
+  WIF_PROVIDER: projects/${{ secrets.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/legal-demo-dev-wip-github-glb/providers/legal-agent-demo-glb
+  SERVICE_ACCOUNT: sa-legal-agent-dev@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+
+  GAR_BACKEND_REPOSITORY: legal-agent-demo-ar-backend-ase1
+  GAR_FRONTEND_REPOSITORY: legal-agent-demo-ar-frontend-ase1
+  BACKEND_SERVICE_NAME: legal-agent-demo-cr-backend-ase1
+  FRONTEND_SERVICE_NAME: legal-agent-demo-cr-frontend-ase1
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  # ============================================================
+  # Build & push images to Google Artifact Registry
+  # ============================================================
+  build-backend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Setup buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deployment/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_BACKEND_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_BACKEND_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:latest
+
+  build-frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Setup buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deployment/Dockerfile.frontend
+          push: true
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_FRONTEND_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_FRONTEND_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:latest
+
+  # ============================================================
+  # Deploy backend to Cloud Run (exposes its URL for the frontend)
+  # ============================================================
+  deploy-backend:
+    needs: build-backend
+    runs-on: ubuntu-22.04
+    outputs:
+      backend_url: ${{ steps.deploy.outputs.backend_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy backend service
+        id: deploy
+        run: |
+          IMAGE_TAG=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_BACKEND_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
+
+          # Use a custom delimiter (^##^) so values containing commas/URLs are safe.
+          gcloud run deploy ${{ env.BACKEND_SERVICE_NAME }} \
+            --image "$IMAGE_TAG" \
+            --region ${{ env.REGION }} \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --platform managed \
+            --memory 2Gi \
+            --cpu 2 \
+            --timeout 3600 \
+            --ingress all \
+            --allow-unauthenticated \
+            --set-env-vars "^##^GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }}##GCP_REGION=${{ env.REGION }}##GEMINI_API_KEY=${{ env.GEMINI_API_KEY }}##GEMINI_MODEL_NAME=${{ env.GEMINI_MODEL }}##GEMINI_REGION=${{ env.REGION }}##LEGAL_BUCKET=${{ env.LEGAL_BUCKET }}##AUTH_METHOD=service_account##NEO4J_URI=${{ env.NEO4J_URI }}##NEO4J_USERNAME=${{ env.NEO4J_USERNAME }}##NEO4J_PASSWORD=${{ env.NEO4J_PASSWORD }}##NEO4J_DATABASE=${{ env.NEO4J_DATABASE }}"
+
+          URL=$(gcloud run services describe ${{ env.BACKEND_SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --format='value(status.url)')
+          echo "backend_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Backend deployed at: $URL"
+
+  # ============================================================
+  # Deploy frontend to Cloud Run (wired to the backend URL)
+  # ============================================================
+  deploy-frontend:
+    needs: [build-frontend, deploy-backend]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Google Auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy frontend service
+        run: |
+          IMAGE_TAG=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_FRONTEND_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
+          BACKEND_URL="${{ needs.deploy-backend.outputs.backend_url }}"
+
+          gcloud run deploy ${{ env.FRONTEND_SERVICE_NAME }} \
+            --image "$IMAGE_TAG" \
+            --region ${{ env.REGION }} \
+            --service-account ${{ env.SERVICE_ACCOUNT }} \
+            --platform managed \
+            --memory 1Gi \
+            --cpu 1 \
+            --timeout 3600 \
+            --session-affinity \
+            --ingress all \
+            --allow-unauthenticated \
+            --set-env-vars "^##^BACKEND_URL=${BACKEND_URL}##NEO4J_URI=${{ env.NEO4J_URI }}##NEO4J_USERNAME=${{ env.NEO4J_USERNAME }}##NEO4J_PASSWORD=${{ env.NEO4J_PASSWORD }}##NEO4J_DATABASE=${{ env.NEO4J_DATABASE }}"
