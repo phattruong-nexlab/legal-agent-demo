@@ -5,10 +5,13 @@ Workflow: [`.github/workflows/legal-agent-demo.yaml`](../.github/workflows/legal
 Triggers on push to **`develop`** (and manual `workflow_dispatch`). It builds two images,
 pushes them to Google Artifact Registry, then deploys two Cloud Run services:
 
-| Service  | Dockerfile                     | Cloud Run service                  | Artifact Registry repo               |
-| -------- | ------------------------------ | ---------------------------------- | ------------------------------------ |
-| Backend  | `deployment/Dockerfile`        | `legal-agent-dev-cr-backend-ase1`  | `legal-agent-dev-ar-backend-ase1`    |
-| Frontend | `deployment/Dockerfile.frontend` | `legal-agent-dev-cr-frontend-ase1` | `legal-agent-dev-ar-frontend-ase1` |
+Both images live in a **single** Artifact Registry repo (`legal-agent-demo-ar-ase1`),
+distinguished by image name (the Cloud Run service name).
+
+| Service  | Dockerfile                       | Cloud Run service                    | Image (repo / name)                                   |
+| -------- | -------------------------------- | ------------------------------------ | ----------------------------------------------------- |
+| Backend  | `deployment/Dockerfile`          | `legal-agent-demo-cr-backend-ase1`   | `legal-agent-demo-ar-ase1/legal-agent-demo-cr-backend-ase1`  |
+| Frontend | `deployment/Dockerfile.frontend` | `legal-agent-demo-cr-frontend-ase1`  | `legal-agent-demo-ar-ase1/legal-agent-demo-cr-frontend-ase1` |
 
 The frontend is deployed **after** the backend and receives the backend's Cloud Run URL
 via the `BACKEND_URL` env var automatically.
@@ -52,10 +55,8 @@ export GITHUB_REPO=ORG/REPO   # e.g. nexlab/legal-agent-demo
 gcloud services enable run.googleapis.com artifactregistry.googleapis.com \
   iamcredentials.googleapis.com --project "$PROJECT_ID"
 
-# --- Artifact Registry repos ---
-gcloud artifacts repositories create legal-agent-dev-ar-backend-ase1 \
-  --repository-format=docker --location=$REGION --project "$PROJECT_ID"
-gcloud artifacts repositories create legal-agent-dev-ar-frontend-ase1 \
+# --- Artifact Registry repo (single repo, shared by backend + frontend) ---
+gcloud artifacts repositories create legal-agent-demo-ar-ase1 \
   --repository-format=docker --location=$REGION --project "$PROJECT_ID"
 
 # --- Deployer service account + roles ---
