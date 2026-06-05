@@ -47,7 +47,7 @@ def get_settings() -> _FeSettings:
         NEO4J_USERNAME=os.getenv("NEO4J_USERNAME", ""),
         NEO4J_PASSWORD=os.getenv("NEO4J_PASSWORD", ""),
         NEO4J_DATABASE=os.getenv("NEO4J_DATABASE", ""),
-        BACKEND_URL=os.getenv("BACKEND_URL", "http://localhost:8000"),
+        BACKEND_URL=os.getenv("BACKEND_URL", "http://localhost:8001"),
     )
 
 st.set_page_config(
@@ -961,20 +961,29 @@ def _call_extract_legal_basis(pdf_bytes: bytes, filename: str) -> dict:
     return r.json()
 
 
+def _call_extract_segments(pdf_bytes: bytes, filename: str) -> dict:
+    files = {"file": (filename, pdf_bytes, "application/pdf")}
+    r = requests.post(
+        f"{_api_base()}/legal-analysis/extract-segments",
+        files=files,
+        timeout=300,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 def _call_audit_by_graph(
-    pdf_bytes: bytes,
-    filename: str,
     audited_doc: dict,
     legal_bases: list[dict],
-) -> list[dict]:
-    files = {"file": (filename, pdf_bytes, "application/pdf")}
+    segments: list[dict],
+) -> dict:
     data = {
         "audited_document": json.dumps(audited_doc, ensure_ascii=False),
         "legal_bases": json.dumps(legal_bases, ensure_ascii=False),
+        "segments": json.dumps(segments, ensure_ascii=False),
     }
     r = requests.post(
         f"{_api_base()}/legal-analysis/audit-by-graph",
-        files=files,
         data=data,
         timeout=600,
     )
@@ -987,17 +996,10 @@ def _reset_audit_state() -> None:
         "audit_pdf",
         "audit_filename",
         "audit_extracted",
+        "audit_segments",
         "audit_results",
     ):
         st.session_state.pop(k, None)
-
-
-def _basis_label(basis: dict) -> str:
-    return (
-        (basis.get("law_number") or "").strip()
-        or (basis.get("law_name") or "").strip()
-        or "?"
-    )
 
 
 def _render_extracted_section(extracted: dict) -> tuple[dict, list[dict]]:
@@ -1032,84 +1034,53 @@ def _render_extracted_section(extracted: dict) -> tuple[dict, list[dict]]:
     return doc, bases
 
 
-def _run_audit_loop(
-    pdf_bytes: bytes,
-    filename: str,
+def _render_segments_section(unit_type: str, segments: list[dict]) -> None:
+    st.markdown(
+        f"**🧩 Đơn vị cấu trúc lớn nhất: `{unit_type}` — {len(segments)} phần**"
+    )
+    seg_df = pd.DataFrame(
+        [
+            {
+                "#": s.get("index"),
+                "Phần": s.get("label") or "",
+                "Độ dài (ký tự)": len(s.get("content") or ""),
+            }
+            for s in segments
+        ]
+    )
+    st.dataframe(seg_df, hide_index=True, use_container_width=True)
+    with st.expander("Xem nội dung từng phần"):
+        for s in segments:
+            st.markdown(f"**{s.get('label')}**")
+            st.text((s.get("content") or "")[:2000])
+            st.divider()
+
+
+def _run_audit(
     audited_doc: dict,
     bases: list[dict],
-) -> list[dict]:
-    """Gọi /audit-by-graph tuần tự cho từng basis để show progress thật."""
-    results: list[dict] = []
-    n = len(bases)
-
-    progress = st.progress(0.0, text="Khởi tạo...")
-    table_slot = st.empty()
-    log_slot = st.container(border=True)
-
-    def _refresh_table() -> None:
-        if not results:
-            return
-        rows = []
-        for j, r in enumerate(results, start=1):
-            status = _norm_status(r.get("overall_status"))
-            icon, _ = STATUS_META.get(status, ("•", "#888"))
-            articles = r.get("articles") or []
-            n_rel = sum(1 for a in articles if a.get("applicable"))
-            rows.append(
-                {
-                    "#": j,
-                    "Căn cứ pháp lý": r.get("audited_law") or "",
-                    "Ngày": r.get("date") or "",
-                    "Trạng thái": f"{icon} {status}",
-                    "Khớp KG": "✓" if r.get("matched_doc_id") else "—",
-                    "Điều liên quan": n_rel if articles else "—",
-                }
-            )
-        table_slot.dataframe(
-            pd.DataFrame(rows), hide_index=True, use_container_width=True
-        )
-
-    for i, basis in enumerate(bases, start=1):
-        name = _basis_label(basis)
-        progress.progress(
-            (i - 1) / n,
-            text=f"{i}/{n} — Đang đối chiếu với {name}...",
-        )
-        with log_slot:
-            placeholder = st.empty()
-            placeholder.markdown(f"⏳ **{i}/{n}** — {name} — đang chạy...")
-
+    segments: list[dict],
+) -> dict:
+    """Gọi /audit-by-graph một lần (backend chạy song song các cặp segment × căn cứ)."""
+    with st.spinner(
+        "Đang đối chiếu văn bản đầu vào với văn bản căn cứ "
+        "(mỗi phần so với từng đơn vị của văn bản căn cứ, chạy song song)..."
+    ):
         t0 = time.time()
         try:
-            res = _call_audit_by_graph(pdf_bytes, filename, audited_doc, [basis])
-            item = (res or [{}])[0]
+            resp = _call_audit_by_graph(audited_doc, bases, segments)
         except Exception as exc:  # noqa: BLE001
-            item = {
-                "audited_law": name,
-                "date": basis.get("date") or "",
-                "matched_doc_id": None,
-                "overall_status": "Cần kiểm tra",
-                "explanation": f"Lỗi gọi API: {exc}",
-                "articles": [],
-            }
+            st.error(f"❌ Audit thất bại: {exc}")
+            return {"unit_type": segments[0].get("unit_type", ""), "results": []}
         dt = time.time() - t0
-        results.append(item)
-
-        status = _norm_status(item.get("overall_status"))
-        icon, _ = STATUS_META.get(status, ("•", "#888"))
-        articles = item.get("articles") or []
-        n_rel = sum(1 for a in articles if a.get("applicable"))
-        placeholder.markdown(
-            f"{icon} **{i}/{n}** — {name} — `{status}` "
-            f"({n_rel}/{len(articles)} điều liên quan, {dt:.1f}s)"
-        )
-        _refresh_table()
-
-    progress.progress(1.0, text=f"Hoàn tất — đã audit {n} căn cứ.")
-    return results
+    st.success(f"Hoàn tất sau {dt:.1f}s.")
+    return resp
 
 
-def _render_results(results: list[dict]) -> None:
+def _render_results(response: dict) -> None:
+    unit_type = response.get("unit_type") or "phần"
+    results = response.get("results") or []
+
     counts = {k: 0 for k in STATUS_META}
     for r in results:
         s = _norm_status(r.get("overall_status"))
@@ -1125,8 +1096,8 @@ def _render_results(results: list[dict]) -> None:
     for i, r in enumerate(results, start=1):
         status = _norm_status(r.get("overall_status"))
         icon, _ = STATUS_META.get(status, ("•", "#888"))
-        articles = r.get("articles") or []
-        n_rel = sum(1 for a in articles if a.get("applicable"))
+        segs = r.get("segments") or []
+        n_rel = sum(1 for s in segs if s.get("applicable"))
         rows.append(
             {
                 "#": i,
@@ -1134,45 +1105,47 @@ def _render_results(results: list[dict]) -> None:
                 "Ngày": r.get("date") or "",
                 "Trạng thái": f"{icon} {status}",
                 "Khớp KG": "✓" if r.get("matched_doc_id") else "—",
-                "Điều liên quan": n_rel if articles else "—",
+                f"{unit_type} liên quan": n_rel if segs else "—",
             }
         )
     st.markdown("### 📋 Kết quả tổng hợp")
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-    st.markdown("### 🔍 Chi tiết — chỉ các điều liên quan")
-    st.caption("Các điều không liên quan đến văn bản đầu vào đã được lọc bỏ.")
+    st.markdown(f"### 🔍 Chi tiết — chỉ các {unit_type} liên quan")
+    st.caption(
+        f"Các {unit_type} không thuộc phạm vi điều chỉnh của căn cứ đã được lọc bỏ. "
+        "Cột 'Lý do' giải thích vì sao kết luận như vậy (kể cả khi tuân thủ)."
+    )
     for i, r in enumerate(results, start=1):
         status = _norm_status(r.get("overall_status"))
         icon, _ = STATUS_META.get(status, ("•", "#888"))
-        articles = r.get("articles") or []
-        related = [a for a in articles if a.get("applicable")]
+        segs = r.get("segments") or []
+        related = [s for s in segs if s.get("applicable")]
         title = (
             f"{icon} {i}. {r.get('audited_law') or '?'} — {status} "
-            f"({len(related)}/{len(articles)} điều liên quan)"
+            f"({len(related)}/{len(segs)} {unit_type} liên quan)"
         )
         with st.expander(title):
             if r.get("explanation"):
                 st.info(r["explanation"])
             if not related:
                 st.caption(
-                    "Không có điều khoản nào liên quan đến nội dung văn bản đầu vào."
+                    f"Không có {unit_type} nào liên quan đến căn cứ này."
                 )
                 continue
-            art_rows = []
-            for a in related:
-                a_status = _norm_status(a.get("status"))
-                a_icon, _ = STATUS_META.get(a_status, ("•", "#888"))
-                art_rows.append(
+            seg_rows = []
+            for s in related:
+                s_status = _norm_status(s.get("status"))
+                s_icon, _ = STATUS_META.get(s_status, ("•", "#888"))
+                seg_rows.append(
                     {
-                        "Điều": a.get("article_number"),
-                        "Tiêu đề": a.get("article_title") or "",
-                        "Trạng thái": f"{a_icon} {a_status}",
-                        "Giải thích": a.get("explanation") or "",
+                        "Phần": s.get("segment_label") or "",
+                        "Trạng thái": f"{s_icon} {s_status}",
+                        "Lý do": s.get("reason") or "",
                     }
                 )
             st.dataframe(
-                pd.DataFrame(art_rows), hide_index=True, use_container_width=True
+                pd.DataFrame(seg_rows), hide_index=True, use_container_width=True
             )
 
 
@@ -1227,27 +1200,51 @@ def render_audit_page() -> None:
     if not bases:
         return
 
-    # ----- Bước 2: Audit -----
+    # ----- Bước 2: Trích cấu trúc văn bản -----
     st.divider()
-    st.subheader("Bước 2 — Đối chiếu với Knowledge Graph")
+    st.subheader("Bước 2 — Trích cấu trúc văn bản đầu vào")
 
-    if "audit_results" not in st.session_state:
+    if "audit_segments" not in st.session_state:
         st.caption(
-            "Hệ thống sẽ gọi `/audit-by-graph` lần lượt cho từng căn cứ để hiển thị "
-            "tiến trình thật. Có thể mất vài phút tùy số căn cứ và số điều."
+            "Hệ thống lấy đơn vị cấu trúc lớn nhất (Chương → nếu không có thì Điều) "
+            "để vừa hiển thị, vừa dùng làm đơn vị đối chiếu."
         )
-        if st.button("⚖️ Bắt đầu audit", type="primary"):
-            results = _run_audit_loop(
-                st.session_state.audit_pdf,
-                st.session_state.audit_filename,
-                doc,
-                bases,
-            )
-            st.session_state.audit_results = results
+        if st.button("🧩 Trích cấu trúc", type="primary"):
+            with st.spinner("Đang gọi /extract-segments..."):
+                try:
+                    st.session_state.audit_segments = _call_extract_segments(
+                        st.session_state.audit_pdf,
+                        st.session_state.audit_filename,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"❌ Trích cấu trúc thất bại: {exc}")
+                    return
             st.rerun()
         return
 
-    # ----- Bước 3: Render results -----
+    seg_data = st.session_state.audit_segments
+    unit_type = seg_data.get("unit_type") or "phần"
+    segments = seg_data.get("segments") or []
+    _render_segments_section(unit_type, segments)
+    if not segments:
+        st.warning("⚠️ Không trích được cấu trúc nào.")
+        return
+
+    # ----- Bước 3: Audit -----
+    st.divider()
+    st.subheader("Bước 3 — Đối chiếu với Knowledge Graph")
+
+    if "audit_results" not in st.session_state:
+        st.caption(
+            f"Mỗi {unit_type} sẽ được đối chiếu với từng căn cứ (chạy song song). "
+            "Đánh giá theo hướng khoan dung và luôn kèm lý do."
+        )
+        if st.button("⚖️ Bắt đầu audit", type="primary"):
+            st.session_state.audit_results = _run_audit(doc, bases, segments)
+            st.rerun()
+        return
+
+    # ----- Bước 4: Render results -----
     st.divider()
     _render_results(st.session_state.audit_results)
 

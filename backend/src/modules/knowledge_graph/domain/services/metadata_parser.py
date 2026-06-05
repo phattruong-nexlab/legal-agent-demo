@@ -26,6 +26,13 @@ _SO_HIEU_PATTERNS = [
     re.compile(r"Số\s+(\d+\s*/\s*\d{4}\s*/\s*[A-ZĐ]+-[A-ZĐ]+)", re.I),
     # "Số hiệu: 06/2025/TT-BTTTT"
     re.compile(r"Số\s+hiệu\s*:?\s*(\d+\s*/\s*\d{4}\s*/\s*[A-ZĐ]+-[A-ZĐ]+)", re.I),
+    # No year — old-style số hiệu, e.g. "Số: 518-TTg", "Số: 666/TTg", "Số: 123/CP".
+    # Anchored to start-of-line + a MANDATORY colon so it matches the header số hiệu
+    # and NOT inline references such as "Tờ trình số 2564/TCCB" in the body (lowercase
+    # "số", mid-line, no colon). Accepts both "-" and "/" separators.
+    # Kept last so the more specific year/hyphen patterns above win first.
+    re.compile(r"(?m)^\s*Số\s*hiệu\s*:\s*(\d+\s*[-/]\s*[A-ZĐ][A-Za-zĐđ]+)", re.I),
+    re.compile(r"(?m)^\s*Số\s*:\s*(\d+\s*[-/]\s*[A-ZĐ][A-Za-zĐđ]+)", re.I),
 ]
 
 # Filename patterns like "TT_06_2025.pdf", "ND-12-2024.pdf"

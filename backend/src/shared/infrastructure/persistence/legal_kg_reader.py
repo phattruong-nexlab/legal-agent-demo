@@ -107,6 +107,52 @@ class LegalKGReader:
             logger.exception("Failed to get articles for doc_id=%s", doc_id)
             return []
 
+    async def get_chapters(self, doc_id: str) -> list[dict]:
+        """Return chapters of a document, each with its ordered articles.
+
+        Only covers the Document→Chapter→Article hierarchy. Returns [] when the
+        document has no chapters (caller should fall back to get_articles).
+        """
+        if not self._driver:
+            return []
+
+        query = (
+            "MATCH (d:Document {id: $doc_id})-[:HAS_CHAPTER]->(c:Chapter) "
+            "OPTIONAL MATCH (c)-[:HAS_ARTICLE]->(a:Article) "
+            "WITH c, a ORDER BY a.thứ_tự "
+            "WITH c, collect(CASE WHEN a IS NULL THEN NULL ELSE "
+            "{so: a.số, tieu_de: a.tiêu_đề, noi_dung: a.nội_dung} END) AS arts "
+            "RETURN c.số AS so, c.tiêu_đề AS tieu_de, "
+            "[x IN arts WHERE x IS NOT NULL] AS articles "
+            "ORDER BY c.số"
+        )
+
+        async def _read(tx) -> list[dict]:
+            result = await tx.run(query, {"doc_id": doc_id})
+            return await result.data()
+
+        try:
+            async with self._driver.session(database=self._database) as session:
+                rows = await session.execute_read(_read)
+            return [
+                {
+                    "so": r.get("so") or 0,
+                    "tieu_de": r.get("tieu_de") or "",
+                    "articles": [
+                        {
+                            "so": a.get("so") or 0,
+                            "tieu_de": a.get("tieu_de") or "",
+                            "noi_dung": a.get("noi_dung") or "",
+                        }
+                        for a in (r.get("articles") or [])
+                    ],
+                }
+                for r in rows
+            ]
+        except Exception:
+            logger.exception("Failed to get chapters for doc_id=%s", doc_id)
+            return []
+
     async def get_document_summary(self, doc_id: str) -> dict | None:
         """Return {doc_id, so_hieu, ten, loai, ngay_ban_hanh, ngay_hieu_luc,
         ngay_het_hieu_luc, trang_thai} for a single Document."""

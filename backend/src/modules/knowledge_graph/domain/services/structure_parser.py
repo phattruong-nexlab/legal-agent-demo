@@ -45,7 +45,7 @@ def _count_quote_marks(line: str) -> int:
     return sum(line.count(q) for q in ('"', "“", "”", "„"))
 
 
-def parse_structure(raw_text: str) -> ParsedStructure:
+def parse_structure(raw_text: str, validate: bool = True) -> ParsedStructure:
     text = normalize_nfc(raw_text)
     lines = text.split("\n")
 
@@ -143,7 +143,8 @@ def parse_structure(raw_text: str) -> ParsedStructure:
             in_quote = True
 
     structure = ParsedStructure(chapters=chapters, articles=root_articles)
-    _validate(structure)
+    if validate:
+        _validate(structure)
     return structure
 
 
