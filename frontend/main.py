@@ -1564,7 +1564,7 @@ PAGES = {
     "🕸️ Knowledge Graph": render_graph_page,
     "📥 Nạp tài liệu": render_ingest_page,
     "🔎 Audit tuân thủ": render_audit_page,
-    "🤖 Hỏi đáp Graph": render_query_page,
+    # "🤖 Hỏi đáp Graph": render_query_page,  # tạm ẩn khỏi frontend
 }
 
 page_key = st.sidebar.radio("📑 Trang", list(PAGES.keys()), index=0)
