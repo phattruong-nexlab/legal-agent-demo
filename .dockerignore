@@ -1,0 +1,12 @@
+# Node / Next.js (frontend_next) — installed/built inside the image
+**/node_modules
+frontend_next/.next
+frontend_next/.env.local
+
+# Python caches
+**/__pycache__
+**/*.pyc
+
+# Git / local
+.git
+.github
