@@ -1,47 +1,49 @@
 # =========================
-# Frontend (Streamlit) image
+# Frontend (Next.js) image
 # Build context = repo root
 # =========================
 
-# -------- 1. Builder stage --------
-FROM python:3.12-slim AS builder
+# -------- 1. Dependencies --------
+FROM node:20-slim AS deps
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# fe.txt does `-r base.txt`, so the whole requirements/ dir must be present.
-COPY requirements/ /app/requirements/
-RUN pip install --no-cache-dir -r requirements/fe.txt
+COPY frontend_next/package.json frontend_next/package-lock.json ./
+RUN npm ci
 
 
-# -------- 2. Runtime stage --------
-FROM python:3.12-slim AS runtime
+# -------- 2. Builder --------
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/opt/venv/bin:$PATH"
+ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN apt-get update && apt-get install -y \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=deps /app/node_modules ./node_modules
+COPY frontend_next/ ./
 
-COPY --from=builder /opt/venv /opt/venv
+RUN npm run build
 
-COPY frontend/main.py /app/main.py
-COPY frontend/.streamlit /app/.streamlit
-COPY deployment/entrypoint-fe.sh /app/entrypoint-fe.sh
 
-RUN chmod +x /app/entrypoint-fe.sh
+# -------- 3. Runtime --------
+FROM node:20-slim AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=8080 \
+    HOSTNAME=0.0.0.0
+
+RUN addgroup --system --gid 1001 nodejs \
+    && adduser --system --uid 1001 nextjs
+
+# Standalone output bundles the minimal server + node_modules.
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
 
 EXPOSE 8080
 
-ENTRYPOINT ["/app/entrypoint-fe.sh"]
+CMD ["node", "server.js"]

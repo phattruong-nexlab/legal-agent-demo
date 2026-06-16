@@ -1,11 +1,11 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException
 
 from ...application.usecase.audit_by_graph import AuditByGraphUseCase
 from ..dependencies import get_audit_by_graph_usecase
-from ..schemas import AuditByGraphResult, LegalBasisItem
+from ..schemas import AuditByGraphResponse, DocumentSegment, LegalBasisItem
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -41,34 +41,49 @@ def _parse_legal_basis_item(payload: str) -> LegalBasisItem:
         raise HTTPException(status_code=400, detail="Invalid audited_document fields") from exc
 
 
-@router.post("/audit-by-graph", response_model=list[AuditByGraphResult])
+def _parse_segments(payload: str) -> list[DocumentSegment]:
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid segments JSON") from exc
+
+    if not isinstance(data, list) or not data:
+        raise HTTPException(status_code=400, detail="segments must be a non-empty list")
+
+    try:
+        return [DocumentSegment.model_validate(item) for item in data]
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid segments items") from exc
+
+
+@router.post("/audit-by-graph", response_model=AuditByGraphResponse)
 async def audit_by_graph(
-    file: UploadFile = File(...),
     audited_document: str = Form(
         ..., description="JSON object of {law_number, law_name, date} for the audited document"
     ),
     legal_bases: str = Form(..., description="JSON array of {law_number, law_name, date}"),
+    segments: str = Form(
+        ..., description="JSON array of segments from /extract-segments (đơn vị cấu trúc input)"
+    ),
     usecase: AuditByGraphUseCase = Depends(get_audit_by_graph_usecase),
-) -> list[AuditByGraphResult]:
-    """
-    Audit compliance using the Knowledge Graph as reference.
+) -> AuditByGraphResponse:
+    """Audit tuân thủ dựa trên Knowledge Graph, đối chiếu theo từng đơn vị cấu trúc.
 
-    For each legal basis, fetches all Article nodes from Neo4j and checks compliance
-    per article in parallel. Returns per-article breakdown and an aggregated overall status.
-
-    Overall status rules:
-    - "Không tuân thủ" if any applicable article is non-compliant
-    - "Cần kiểm tra" if any applicable article needs review (and none are non-compliant)
-    - "Tuân thủ" if all applicable articles are compliant
+    Nhận sẵn các segment (Chương/Điều) đã trích từ /extract-segments — KHÔNG convert
+    lại file. Với mỗi (segment × căn cứ) gọi 1 LLM call (chạy song song có giới hạn),
+    đánh giá theo hướng khoan dung, rồi gom thành trạng thái tổng cho từng căn cứ.
     """
-    logger.info(f"[audit-by-graph] Start - file: {file.filename}")
-    file_bytes = await file.read()
     audited_item = _parse_legal_basis_item(audited_document)
     legal_items = _parse_legal_bases(legal_bases)
+    segment_items = _parse_segments(segments)
+    logger.info(
+        "[audit-by-graph] Start - %d segments, %d bases",
+        len(segment_items), len(legal_items),
+    )
     result = await usecase.execute(
-        file_bytes,
+        [s.model_dump() for s in segment_items],
         [item.model_dump() for item in legal_items],
         audited_item.model_dump(),
     )
-    logger.info(f"[audit-by-graph] Done - items: {len(result)}")
+    logger.info("[audit-by-graph] Done - items: %d", len(result.get("results", [])))
     return result

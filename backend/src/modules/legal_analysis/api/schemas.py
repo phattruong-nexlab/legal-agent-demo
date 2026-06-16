@@ -39,22 +39,37 @@ class AuditLegalBasisResult(BaseModel):
 	)
 
 
-class ArticleComplianceResult(BaseModel):
-    """Compliance result for a single Article node from the Knowledge Graph."""
+class DocumentSegment(BaseModel):
+    """Một đơn vị cấu trúc lớn nhất của văn bản đầu vào (Chương/Điều/Toàn văn)."""
 
-    article_id: str = Field(..., description="Canonical article node ID in the KG")
-    article_number: int = Field(..., description="Article number (Điều số)")
-    article_title: str = Field("", description="Article title (tiêu đề)")
-    applicable: bool = Field(..., description="Whether this article applies to the audited document")
+    unit_type: str = Field(..., description="Loại đơn vị: Chương | Điều | Toàn văn")
+    index: int = Field(..., description="Số thứ tự segment (1-based)")
+    label: str = Field(..., description="Nhãn hiển thị, ví dụ 'Chương I — Quy định chung'")
+    content: str = Field("", description="Nội dung text của segment (đưa vào audit)")
+
+
+class ExtractSegmentsResponse(BaseModel):
+    """Kết quả trích cấu trúc văn bản đầu vào."""
+
+    unit_type: str = Field(..., description="Đơn vị cấu trúc lớn nhất được dùng")
+    segments: list[DocumentSegment] = Field(default_factory=list)
+
+
+class SegmentComplianceResult(BaseModel):
+    """Kết quả tuân thủ của một segment input đối với một căn cứ."""
+
+    segment_index: int | None = Field(None, description="Số thứ tự segment")
+    segment_label: str = Field("", description="Nhãn segment")
+    applicable: bool = Field(..., description="Segment có thuộc phạm vi điều chỉnh không")
     status: str = Field(
         ...,
         description="Tuân thủ | Không tuân thủ | Cần kiểm tra | Không liên quan",
     )
-    explanation: str = Field("", description="LLM explanation for the compliance decision")
+    reason: str = Field("", description="Lý do/giải thích ngắn cho kết luận")
 
 
 class AuditByGraphResult(BaseModel):
-    """Audit result for one legal basis, with per-article breakdown."""
+    """Audit result for one legal basis, with per-segment breakdown."""
 
     audited_law: str = Field(..., description="law_number if present, else law_name")
     date: str = Field(..., description="Promulgation date or empty")
@@ -67,9 +82,16 @@ class AuditByGraphResult(BaseModel):
         ),
     )
     explanation: str = Field("", description="Top-level explanation (populated on error or no-match cases)")
-    articles: list[ArticleComplianceResult] = Field(
-        default_factory=list, description="Per-article compliance results"
+    segments: list[SegmentComplianceResult] = Field(
+        default_factory=list, description="Per-segment compliance results"
     )
+
+
+class AuditByGraphResponse(BaseModel):
+    """Toàn bộ kết quả audit: đơn vị cấu trúc + kết quả theo từng căn cứ."""
+
+    unit_type: str = Field(..., description="Đơn vị cấu trúc input được đối chiếu")
+    results: list[AuditByGraphResult] = Field(default_factory=list)
 
 
 class LegalDocumentRelation(BaseModel):

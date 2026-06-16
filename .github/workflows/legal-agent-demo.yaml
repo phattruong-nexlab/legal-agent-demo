@@ -23,8 +23,7 @@ env:
   WIF_PROVIDER: projects/${{ secrets.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/legal-demo-dev-wip-github-glb/providers/legal-agent-demo-glb
   SERVICE_ACCOUNT: sa-legal-agent-dev@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com
 
-  GAR_BACKEND_REPOSITORY: legal-agent-demo-ar-backend-ase1
-  GAR_FRONTEND_REPOSITORY: legal-agent-demo-ar-frontend-ase1
+  GAR_REPOSITORY: legal-agent-demo-ar-ase1
   BACKEND_SERVICE_NAME: legal-agent-demo-cr-backend-ase1
   FRONTEND_SERVICE_NAME: legal-agent-demo-cr-frontend-ase1
 
@@ -63,8 +62,8 @@ jobs:
           file: ./deployment/Dockerfile
           push: true
           tags: |
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_BACKEND_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_BACKEND_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:latest
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:latest
 
   build-frontend:
     runs-on: ubuntu-22.04
@@ -93,8 +92,8 @@ jobs:
           file: ./deployment/Dockerfile.frontend
           push: true
           tags: |
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_FRONTEND_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_FRONTEND_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:latest
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:latest
 
   # ============================================================
   # Deploy backend to Cloud Run (exposes its URL for the frontend)
@@ -119,7 +118,7 @@ jobs:
       - name: Deploy backend service
         id: deploy
         run: |
-          IMAGE_TAG=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_BACKEND_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
+          IMAGE_TAG=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.BACKEND_SERVICE_NAME }}:${{ github.sha }}
 
           # Use a custom delimiter (^##^) so values containing commas/URLs are safe.
           gcloud run deploy ${{ env.BACKEND_SERVICE_NAME }} \
@@ -160,7 +159,7 @@ jobs:
 
       - name: Deploy frontend service
         run: |
-          IMAGE_TAG=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_FRONTEND_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
+          IMAGE_TAG=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.FRONTEND_SERVICE_NAME }}:${{ github.sha }}
           BACKEND_URL="${{ needs.deploy-backend.outputs.backend_url }}"
 
           gcloud run deploy ${{ env.FRONTEND_SERVICE_NAME }} \

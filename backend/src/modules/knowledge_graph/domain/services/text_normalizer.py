@@ -84,8 +84,8 @@ def so_hieu_to_doc_id(so_hieu: str, fallback_year: int | None = None) -> str | N
         number, year = m.group(1), m.group(2)
         return f"{prefix}-{year}-{number}"
 
-    # Forms without an embedded year, e.g. "666/QĐ-TTg".
-    m = re.match(r"\s*(\d+)\s*/", s)
+    # Forms without an embedded year, e.g. "666/QĐ-TTg", "518-TTg".
+    m = re.match(r"\s*(\d+)\s*[-/]", s)
     if m and fallback_year:
         return f"{prefix}-{fallback_year}-{m.group(1)}"
     return None
